@@ -1,0 +1,262 @@
+// prisma/schema.prisma
+// Banco de dados: PostgreSQL
+// ORM: Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USUÁRIOS ─────────────────────────────────────────────────────────
+model User {
+  id              String     @id @default(uuid())
+  name            String
+  email           String     @unique
+  passwordHash    String
+  role            Role       @default(COMPRADOR)
+  document        String     // CPF ou CNPJ
+  city            String
+  state           String     @db.Char(2)
+  phone           String     // WhatsApp
+  whatsappVerified Boolean   @default(false)
+  whatsappCode    String?    // código de 6 dígitos para verificação
+  kycStatus       KycStatus  @default(PENDING)
+  isActive        Boolean    @default(false) // ativa só após verificar WhatsApp
+  avatarUrl       String?
+  fachadaUrl      String?    // foto da fachada (compradores)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relações
+  products        Product[]  @relation("ProdutorProducts")
+  ordersAsBuyer   Order[]    @relation("CompradorOrders")
+  ordersAsSeller  Order[]    @relation("ProdutorOrders")
+  demands         Demand[]
+  reviewsGiven    Review[]   @relation("ReviewerUser")
+  reviewsReceived Review[]   @relation("ReviewedUser")
+  messages        Message[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+enum Role {
+  PRODUTOR
+  COMPRADOR
+  ADMIN
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─── PRODUTOS ─────────────────────────────────────────────────────────
+model Product {
+  id             String       @id @default(uuid())
+  produtorId     String
+  produtor       User         @relation("ProdutorProducts", fields: [produtorId], references: [id])
+
+  cheeseType     String       // tipo de queijo
+  format         Format
+  pricePerKg     Decimal      @db.Decimal(10, 2)
+  availableKg    Decimal      @db.Decimal(10, 2)
+  vacuumPacked   Boolean      @default(false)
+  labelType      LabelType    @default(SIMPLES)
+  sliceable      Boolean      @default(true)
+  deliveryType   DeliveryType @default(AMBOS)
+  paymentMethods String[]     // ["PIX","BOLETO","CARTAO"]
+  description    String?
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Fotos do produto (até 5)
+  photos         ProductPhoto[]
+  orders         Order[]
+  reviews        Review[]
+
+  @@map("products")
+}
+
+model ProductPhoto {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  order     Int      @default(0) // ordem de exibição
+  createdAt DateTime @default(now())
+
+  @@map("product_photos")
+}
+
+enum Format {
+  BARRA_3KG
+  BARRA_2KG
+  BARRA_1KG
+  G500
+  REDONDO
+}
+
+enum LabelType {
+  SIMPLES
+  COMPLETO_SIE
+}
+
+enum DeliveryType {
+  ENTREGA
+  RETIRADA
+  AMBOS
+}
+
+// ─── DEMANDAS ─────────────────────────────────────────────────────────
+model Demand {
+  id             String   @id @default(uuid())
+  compradorId    String
+  comprador      User     @relation(fields: [compradorId], references: [id])
+
+  cheeseType     String
+  quantityKg     Decimal  @db.Decimal(10, 2)
+  region         String?
+  frequency      Frequency
+  paymentMethods String[]
+  notes          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("demands")
+}
+
+enum Frequency {
+  SEMANAL
+  QUINZENAL
+  MENSAL
+  PONTUAL
+}
+
+// ─── PEDIDOS ──────────────────────────────────────────────────────────
+model Order {
+  id              String      @id @default(uuid())
+  compradorId     String
+  comprador       User        @relation("CompradorOrders", fields: [compradorId], references: [id])
+  produtorId      String
+  produtor        User        @relation("ProdutorOrders", fields: [produtorId], references: [id])
+  productId       String
+  product         Product     @relation(fields: [productId], references: [id])
+
+  quantityKg      Decimal     @db.Decimal(10, 2)
+  unitPrice       Decimal     @db.Decimal(10, 2)
+  totalAmount     Decimal     @db.Decimal(10, 2)
+  paymentMethod   String
+  status          OrderStatus @default(PENDENTE)
+  notes           String?
+  counterProposal Json?       // contraproposta do produtor
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  transaction     Transaction?
+  messages        Message[]
+  reviews         Review[]
+
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDENTE
+  ACEITO
+  RECUSADO
+  CONTRAPROPOSTA
+  CONFIRMADO
+  ENTREGUE
+  CANCELADO
+}
+
+// ─── FINANCEIRO / SPLIT ───────────────────────────────────────────────
+model Transaction {
+  id                  String            @id @default(uuid())
+  orderId             String            @unique
+  order               Order             @relation(fields: [orderId], references: [id])
+
+  grossAmount         Decimal           @db.Decimal(10, 2)
+  platformFeePct      Decimal           @db.Decimal(5, 4) @default(0.0350) // 3.5%
+  platformFeeAmount   Decimal           @db.Decimal(10, 2)
+  produtorAmount      Decimal           @db.Decimal(10, 2)
+
+  gatewayId           String?           // ID no Pagar.me
+  gateway             Gateway           @default(MANUAL)
+  paymentMethod       String
+  status              TransactionStatus @default(PENDING)
+  paidAt              DateTime?
+  createdAt           DateTime          @default(now())
+
+  @@map("transactions")
+}
+
+enum Gateway {
+  PAGARME
+  ASAAS
+  MANUAL
+}
+
+enum TransactionStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+// ─── AVALIAÇÕES ───────────────────────────────────────────────────────
+model Review {
+  id          String   @id @default(uuid())
+  reviewerId  String
+  reviewer    User     @relation("ReviewerUser", fields: [reviewerId], references: [id])
+  reviewedId  String
+  reviewed    User     @relation("ReviewedUser", fields: [reviewedId], references: [id])
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id])
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id])
+
+  rating      Int      // 1 a 5
+  comment     String?
+  createdAt   DateTime @default(now())
+
+  @@unique([reviewerId, orderId]) // só uma avaliação por pedido por usuário
+  @@map("reviews")
+}
+
+// ─── MENSAGENS (chat interno) ─────────────────────────────────────────
+model Message {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id])
+  content   String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@map("messages")
+}
+
+// ─── NOTIFICAÇÕES ─────────────────────────────────────────────────────
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // "NEW_ORDER", "ORDER_ACCEPTED", "PAYMENT_CONFIRMED", etc.
+  title     String
+  body      String
+  data      Json?    // dados extras (orderId, etc.)
+  readAt    DateTime?
+  sentViaWA Boolean  @default(false) // enviado via WhatsApp?
+  createdAt DateTime @default(now())
+
+  @@map("notifications")
+}
